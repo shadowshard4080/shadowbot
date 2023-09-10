@@ -7,8 +7,6 @@ from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 from typing import Literal, Union, Optional
 from datetime import datetime as dt, timedelta
-from langdetect import detect
-from translate import Translator
 from skyfield.api import Topos, load
 from PIL import Image, ImageFont, ImageDraw
 from io import BytesIO
@@ -22,13 +20,14 @@ from config import TOKEN, TIMEZONEDB_API_KEY, WEATHER_API_KEY, PEXELS_API_KEY, A
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.voice_states = True
 client = commands.Bot(command_prefix='/', intents=intents)
 discord_guild = None
 geolocator = Nominatim(user_agent="discord-bot")
 timezone_finder = TimezoneFinder()
 start_time = time.time()
 openai.api_key = AI_KEY
-users_data = {}
+user_data = {}
 user_conversation_history = {}
 user_last_activity = {}
 voice_activity = {}
@@ -80,10 +79,96 @@ last_phase_angle = None
 
 #Ranking System 
 
-BASE_XP = 20
-XP_EXPONENT = 1.5
+def calculate_level(xp):
+    # Implement your level calculation logic here (e.g., doubling XP for each level)
+    return xp // 100 + 1
+
+def save_user_data(server_id, user_id):
+    data_file_path = f"user_data/{server_id}/{user_id}.json"
+    with open(data_file_path, "w") as user_file:
+        json.dump(user_data[user_id], user_file)
+
+def determine_current_role(level):
+    role_mapping = {
+        1: "Newbie",
+        10: "Regular",
+        25: "Veteran",
+        50: "Godlike"
+    }
+    
+    # Find the highest role level that the user has reached
+    current_role = None
+    for xp_threshold, role_name in sorted(role_mapping.items(), reverse=True):
+        if level >= xp_threshold:
+            current_role = role_name
+            break
+    
+    return current_role
+
+async def assign_chat_role(member, level):
+    # Implement your role assignment logic here
+    roles = {
+        1: "Newbie",
+        10: "Regular",
+        25: "Veteran",
+        50: "Godlike"
+    }
+
+    # Get the user's current roles
+    user_roles = [role.name for role in member.roles]
+
+    print(f"Assigning role for {member.display_name} with level {level}")
+
+    # Check if the user already has a higher role
+    for xp_threshold, role_name in sorted(roles.items(), reverse=True):
+        if level >= xp_threshold:
+            # Check if the user already has a higher role
+            if role_name not in user_roles:
+                print(f"Assigning {role_name} role")
+                role = discord.utils.get(member.guild.roles, name=role_name)
+                if role:
+                    await member.add_roles(role)
+
+            # Remove any lower roles if present
+            for lower_xp_threshold, lower_role_name in roles.items():
+                if lower_xp_threshold < xp_threshold and lower_role_name in user_roles:
+                    print(f"Removing {lower_role_name} role")
+                    lower_role = discord.utils.get(member.guild.roles, name=lower_role_name)
+                    if lower_role:
+                        await member.remove_roles(lower_role)
+
+            break
+
+async def send_ranking_embed(member, channel_id, user_data):
+    # Create an embed message with user data and send it to the ranking channel
+    channel = member.guild.get_channel(channel_id)
+    if not channel:
+        return
+
+    # Get the user's avatar URL
+    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+    level = calculate_level(user_data.get("chat_xp", 0))
+    current_role = determine_current_role(level)
+
+    embed = discord.Embed(
+        title=f"🏆 {member.display_name} has ranked up.",
+        description="Congratulations on your achievement!",
+        color=member.color
+    )
+
+    # Set the user's avatar URL
+    embed.set_thumbnail(url=avatar_url)
+    embed.add_field(name="Level:", value=level, inline=False)
+    embed.add_field(name="Current role:", value=current_role, inline=False)
+    embed.add_field(name="Total chat XP:", value=user_data.get("chat_xp", 0), inline=False)
+    embed.add_field(name="Total messages sent:", value=user_data.get("total_messages", 0), inline=False)
+
+    await channel.send(embed=embed)
 
 
+
+
+#More
 
 
 def load_user_coordinates():
@@ -116,27 +201,7 @@ def load_quote_settings():
     except FileNotFoundError:
         return {}
 
-def setup_guild(member_id, guild_id):
-    if guild_id not in users_data:
-        users_data[guild_id] = {"enabled": False}
 
-
-def save_users_data():
-    with open("users_data.json", "w") as f:
-        json.dump(users_data, f)
-
-
-def load_users_data():
-    try:
-        with open("users_data.json", "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print("Ranking system failed to initiate. File not found.")
-        return {}
-
-
-def calculate_required_xp(level):
-    return int(BASE_XP * (level ** XP_EXPONENT))
 
 
 def validate_time_format(time):
@@ -254,7 +319,207 @@ async def echo(ctx: discord.Interaction, channel_id: str, *, message_content: st
         await ctx.followup.send("You are not authorized to use this command.")
 
 
+#Ranking system
 
+@client.tree.command(name="profile", description="Check your rank in the guild.")
+async def profile(ctx: discord.Interaction):
+    await ctx.response.defer()
+
+    server_id = str(ctx.guild.id)
+    user_id = str(ctx.user.id)
+    data_file_path = f"user_data/{server_id}/{user_id}.json"
+
+    if os.path.exists(data_file_path):
+        with open(data_file_path, "r") as user_file:
+            user_info = json.load(user_file)
+
+        # Get the user's avatar URL
+        avatar_url = ctx.user.avatar.url if ctx.user.avatar else ctx.user.default_avatar.url
+        level = calculate_level(user_info.get("chat_xp", 0))
+        current_role = determine_current_role(level)
+
+        embed = discord.Embed(
+            title=f"🏆 {ctx.user.display_name}'s profile",
+            description="Your rank in the server.",
+            color=ctx.user.color
+        )
+
+        # Set the user's avatar URL
+        embed.set_thumbnail(url=avatar_url)
+        embed.add_field(name="Level:", value=level, inline=False)
+        embed.add_field(name="Current role:", value=current_role, inline=False)
+        embed.add_field(name="Total chat XP:", value=user_info.get("chat_xp", 0), inline=False)
+        embed.add_field(name="Total messages sent:", value=user_info.get("total_messages", 0), inline=False)
+
+        await ctx.followup.send(embed=embed)
+    else:
+        await ctx.followup.send("You haven't earned any ranking XP in this server yet.")
+
+@client.tree.command(name="leaderboard", description="View the XP leaderboard.")
+async def leaderboard(ctx: discord.Interaction):
+    await ctx.response.defer()
+
+    server_id = str(ctx.guild.id)
+    leaderboard_data = []  # Create a list to store leaderboard data
+
+    # Loop through each user's data file for the server
+    user_data_dir = f"user_data/{server_id}"
+    for filename in os.listdir(user_data_dir):
+        if filename.endswith(".json"):
+            user_id = filename[:-5]  # Remove the ".json" extension
+            data_file_path = os.path.join(user_data_dir, filename)
+
+            # Load the user's data
+            with open(data_file_path, "r") as user_file:
+                user_data = json.load(user_file)
+
+            # Calculate the user's level and current role
+            level = calculate_level(user_data.get("chat_xp", 0))
+            current_role = determine_current_role(level)
+
+            # Fetch the user's name (nickname or username)
+            member = ctx.guild.get_member(int(user_id))
+            if member:
+                user_name = member.display_name
+            else:
+                user_name = "User Not Found"  # You can customize this message
+
+            # Append the user's data to the leaderboard
+            leaderboard_data.append({
+                "user_name": user_name,
+                "level": level,
+                "current_role": current_role
+            })
+
+    # Sort the leaderboard data by level (you can customize the sorting criteria)
+    leaderboard_data.sort(key=lambda x: x["level"], reverse=True)
+
+    # Create an embed for the leaderboard
+    embed = discord.Embed(
+        title="🏆 XP Leaderboard 🏆",
+        color=discord.Color.gold()
+    )
+
+    # Number of users to display per page
+    users_per_page = 10
+
+    # Calculate the current page based on the length of the data
+    current_page = 1
+    max_pages = (len(leaderboard_data) - 1) // users_per_page + 1
+
+    # Calculate the start and end indices for the current page
+    start_index = (current_page - 1) * users_per_page
+    end_index = min(start_index + users_per_page, len(leaderboard_data))
+
+    # Add leaderboard entries to the embed for the current page
+    for index, entry in enumerate(leaderboard_data[start_index:end_index], start=start_index + 1):
+        embed.add_field(
+            name=f"#{index} - {entry['user_name']}",
+            value=f"Level: {entry['level']}\nCurrent Role: {entry['current_role']}",
+            inline=False
+        )
+
+    # Send the initial leaderboard message
+    leaderboard_message = await ctx.followup.send(embed=embed)
+
+    # Define emoji reactions for navigation
+    emoji_left = '⬅️'
+    emoji_right = '➡️'
+
+    # Add emoji reactions for navigation if there are more pages
+    if max_pages > 1:
+        await leaderboard_message.add_reaction(emoji_left)
+        await leaderboard_message.add_reaction(emoji_right)
+
+    # Function to update the leaderboard based on the current page
+    async def update_leaderboard():
+        nonlocal current_page, start_index, end_index
+
+        # Calculate the start and end indices for the current page
+        start_index = (current_page - 1) * users_per_page
+        end_index = min(start_index + users_per_page, len(leaderboard_data))
+
+        # Clear the previous entries in the embed
+        embed.clear_fields()
+
+        # Add leaderboard entries to the embed for the current page
+        for index, entry in enumerate(leaderboard_data[start_index:end_index], start=start_index + 1):
+            embed.add_field(
+                name=f"#{index} - {entry['user_name']}",
+                value=f"Level: {entry['level']}\nCurrent Role: {entry['current_role']}",
+                inline=False
+            )
+
+        # Update the leaderboard message with the new embed
+        await leaderboard_message.edit(embed=embed)
+
+    # Function to check if a user reaction is valid for navigation
+    def check_reaction(reaction, user):
+        return user == ctx.user and reaction.message.id == leaderboard_message.id and str(reaction.emoji) in (emoji_left, emoji_right)
+
+    # Reaction event handling for navigation
+    while True:
+        try:
+            reaction, user = await client.wait_for('reaction_add', timeout=60.0, check=check_reaction)
+
+            if str(reaction.emoji) == emoji_left and current_page > 1:
+                current_page -= 1
+                await update_leaderboard()
+                await leaderboard_message.remove_reaction(emoji_left, user)
+            elif str(reaction.emoji) == emoji_right and current_page < max_pages:
+                current_page += 1
+                await update_leaderboard()
+                await leaderboard_message.remove_reaction(emoji_right, user)
+
+        except asyncio.TimeoutError:
+            break
+
+    # Clear emoji reactions when navigation is no longer allowed
+    await leaderboard_message.clear_reactions()
+
+
+
+@client.tree.command(name="setup_ranking", description="Set up the ranking system in this guild.")
+async def setupranking(ctx: discord.Interaction, enable: bool, channel: discord.TextChannel):
+    await ctx.response.defer()
+    member = ctx.user
+    if member.guild_permissions.administrator or ctx.user.id == 667603757982547968:
+
+        server_settings = {
+            "enabled": enable,
+            "ranking_channel_id": channel.id if enable else None  # Store the channel ID if ranking is enabled, otherwise None
+        }
+
+        # Create a ranking directory if it doesn't exist
+        if not os.path.exists("ranking"):
+            os.makedirs("ranking")
+
+        # Write the server-specific settings to a JSON file
+        server_id = str(ctx.guild.id)
+        with open(f"ranking/{server_id}.json", "w") as settings_file:
+            json.dump(server_settings, settings_file)
+
+        # Send a setup message in the ranking channel
+        if enable:
+            await ctx.followup.send("Setting up the ranking system in this server....")
+
+            # Create color-coded roles for chat
+            chat_roles = {
+                "Newbie": 0x7d9632,
+                "Regular": 0x4caf50,
+                "Veteran": 0x8bc34a,
+                "Godlike": 0x009688
+            }
+
+            for role_name, color_code in chat_roles.items():
+                await ctx.guild.create_role(name=role_name, color=discord.Color(color_code))
+
+            # Edit the setup message
+            await channel.send(content=f"Ranking system is enabled for this server. The roles are:\n\n\"Newbie\" - Level 1\n \"Regular\" - Level 10\n\"Veteran\" - Level 25\n\"Godlike\" - Level 50")
+        else:
+            await ctx.followup.edit_message(content="Ranking system has been disabled in this server.")
+    else:
+        await ctx.followup.send("You must be an administrator to use this command.")
 
 #Experimental AI
 
@@ -1634,6 +1899,54 @@ async def chatban(ctx: discord.Interaction, user: discord.User, ban: bool = True
 #Message replies
 @client.event
 async def on_message(message):
+    if message.author == client.user:
+        return
+
+    server_id = str(message.guild.id)
+
+    # Check if the ranking system is enabled for this server
+    settings_path = f"ranking/{server_id}.json"
+    if os.path.exists(settings_path):
+        with open(settings_path, "r") as settings_file:
+            server_settings = json.load(settings_file)
+
+        if server_settings.get("enabled", False):
+            user_id = str(message.author.id)
+            if user_id not in user_data:
+                user_data[user_id] = {
+                    "chat_xp": 0,
+                    "voice_xp": 0,
+                    "total_messages": 0,
+                    "minutes_in_vc": 0
+                }
+
+            # Calculate and update chat XP
+            user_data[user_id]["chat_xp"] += 10  # You can adjust the XP gain per message as needed
+
+            # Calculate and update level
+            old_level = calculate_level(user_data[user_id]["chat_xp"] - 10)  # Calculate old level before adding XP
+            new_level = calculate_level(user_data[user_id]["chat_xp"])
+
+            if new_level > old_level:
+
+                # Assign the "Newbie" role when reaching level 1 (10 XP)
+                if new_level == 1:
+                    newbie_role = discord.utils.get(message.guild.roles, name="Newbie")
+                    if newbie_role:
+                        await message.author.add_roles(newbie_role)
+                        print(f"Assigned 'Newbie' role to {message.author}")
+
+                await assign_chat_role(message.author, new_level)
+                await send_ranking_embed(message.author, server_settings["ranking_channel_id"], user_data[user_id])
+
+            # Update total messages
+            user_data[user_id]["total_messages"] += 1
+
+            # Save user data
+            with open(f"user_data/{server_id}/{user_id}.json", "w") as user_file:
+                json.dump(user_data[user_id], user_file)
+
+    await client.process_commands(message)
     
     if message.author.id in banned_users:
         print(f"Banned user detected. Ignoring message from user ID: {message.author.id}")
@@ -2074,10 +2387,19 @@ async def on_ready():
 
     await message.edit(content='Status changed to: Online. Syncing client trees...')
     await client.tree.sync()
-    await message.edit(content='Client trees synced successfully. Loading user data....')
-    users_data = load_users_data()
+    await message.edit(content='Client trees synced successfully. Loading user data....') 
     for guild in client.guilds:
-        setup_guild(str(guild.id), str(guild.id))  
+        server_id = str(guild.id)
+        if not os.path.exists(f"user_data/{server_id}"):
+            os.makedirs(f"user_data/{server_id}")
+
+    for member in guild.members:
+        user_id = str(member.id)
+        data_file_path = f"user_data/{server_id}/{user_id}.json"
+        if os.path.exists(data_file_path):
+            with open(data_file_path, "r") as user_file:
+                user_data[user_id] = json.load(user_file)
+    await message.edit(content="User data loaded. Starting tasks...")
     asyncio.create_task(start_audio_scheduler())
     asyncio.create_task(check_inactivity())
     asyncio.create_task(QuoteCog(client).quote_scheduler_task())
@@ -2109,7 +2431,6 @@ async def start_audio_scheduler():
         await asyncio.sleep(1)
 
 async def on_guild_join(guild):
-    setup_guild(None, str(guild.id))
     print(f"Joined guild: {guild.name}")
     channel = client.get_channel(1128424365315330219)
     await channel.send(f"Joined guild: {guild.name}")
