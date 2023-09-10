@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "discord.py": "^1.0.0",
+    "json": "^11.0.0",
+    "lyricsfetchergenius": "^0.0.4",
+    "os": "^0.1.2",
+    "random": "^4.1.0",
+    "requests": "^0.3.0"
+  }
+}
