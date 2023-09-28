@@ -2,7 +2,7 @@
 A free and open source Discord bot, written in Python.
 
 If you know how to make your own instance of the bot, please edit the channel IDs, the owner ID, and the bot's name. Set up the .env file.
-Refer to requirements.txt and config.py.
+Refer to requirements.txt.
 
 You can invite the bot to your server using this link:
 
