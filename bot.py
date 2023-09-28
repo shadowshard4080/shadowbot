@@ -13,8 +13,20 @@ from io import BytesIO
 from bs4 import BeautifulSoup
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-from config import TOKEN, TIMEZONEDB_API_KEY, WEATHER_API_KEY, PEXELS_API_KEY, AI_KEY, IPGEOLOCATION_KEY, SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, latitude, longitude
+from dotenv import load_dotenv
+load_dotenv()
 
+TOKEN = os.getenv('DISCORD_TOKEN')
+TIMEZONEDB_API_KEY = os.getenv('TIMEZONEDB_API_KEY')
+WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
+PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
+AI_KEY = os.getenv('AI_KEY')
+IPGEOLOCATION_KEY = os.getenv('IPGEOLOCATION_KEY')
+SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
+SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
+
+latitude = 47.0037
+longitude = -120.5479
 
 #Intents
 intents = discord.Intents.default()
