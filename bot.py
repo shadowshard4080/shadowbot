@@ -1490,8 +1490,7 @@ async def fetch_weather(ctx: discord.Interaction, location: str):
     else:
         await ctx.followup.send(f"That didn't work. I couldn't find the weather for '{location}'.")
 
-CSE_ID = "029e74ae6ae954611"
-API_KEY = "AIzaSyDnwYeGgke0PJ1pE5TsXO09ns4zfIIjGnA"
+
 @client.tree.command(name="image_search", description="Search for images based on a prompt.")
 async def imagesearch(ctx: discord.Interaction, prompt: str):
     await ctx.response.defer()
